@@ -104,6 +104,14 @@ static void DrawSkeleton(Skeleton* skeleton) {
 
 }
 
+static bool first_flag = true;
+
+static Vector3 NormSumToOne(Vector3 v) {
+	//assumes that all components of v are positive;
+	float sum = v.x + v.y + v.z;
+	return Vector3(v.x/sum, v.y/sum, v.z/sum);
+}
+
 static void DrawModel() {
 
     float* world_positions_array = new float[character->NumVertices() * 3];
@@ -116,30 +124,82 @@ static void DrawModel() {
     **       the skeleton of the character in the rest pose.
     */
 
-    //get T pose global transforms
-    Skeleton* rest = rest_animation->GetFrame(0);
-    Matrix_4x4* rest_trans_gb = new Matrix_4x4[rest->NumJoints()];
-    for	(int i = 0; i < rest->NumJoints(); i++) {
-    	rest_trans_gb[i] = rest->JointTransform(i);
+    // INITIALISE TRANSFORMS IN ADVANCE FOR EACH FRAME ------------------------------------
+
+    Skeleton* rest_skel = rest_animation->GetFrame(0);
+    //initialise rest animation transforms
+    //gb - global, lc - local
+    Matrix_4x4* rest_trans_lc = new Matrix_4x4[rest_skel->NumJoints()];
+    //Matrix_3x3* rest_rot_lc = new Matrix_3x3[rest_skel->NumJoints()];
+    for	(int i = 0; i < rest_skel->NumJoints(); i++) {
+    	//maybe precompute this part somewhere else as it is frame independent
+    	Matrix_4x4 trans_gb = rest_skel->JointTransform(i);
+    	rest_trans_lc[i] = Matrix_4x4::Inverse(trans_gb);
+    	//rest_rot_lc[i] = Matrix_4x4::ToMatrix_3x3(rest_trans_lc[i]);
     }
 
-    int current_frame = int(timer * frames_per_second) % current_animation->NumFrames();
-    printf("current frame %d \n", current_frame);
+    /* transform for current frame and current animation */
+
+    int curr_anim_frame = int(timer * frames_per_second) % current_animation->NumFrames();
+    //printf("current frame %d \n", current_frame);
+
+    Skeleton* curr_skel = current_animation->GetFrame(curr_anim_frame);
+
+    Matrix_4x4* curr_trans_gb = new Matrix_4x4[rest_skel->NumJoints()];
+    for	(int i = 0; i < curr_skel->NumJoints(); i++) {
+    	curr_trans_gb[i] = curr_skel->JointTransform(i);
+    }
+
+    //VISUALIZATION PART -----------------------------------------------------------------
 
     if (show_skeleton) {
-    	DrawSkeleton(rest);
+    	DrawSkeleton(curr_skel);
     }
+
     if (show_mesh) {
 
 		for (int i = 0; i < character->NumVertices(); i++) {
-
-			Vector3 position = character->GetVertex(i).position;
-			Vector3 normal = character->GetVertex(i).normal;
-
 			/*
 			** TODO: Transform position and normal using rest pose and some
 			**       other animated pose from one of the animations
 			*/
+
+			Vertex vertex = character->GetVertex(i);
+			Vector3 position = Vector3::Zero();//vertex.position;
+			Vector3 normal = Vector3::Zero();//vertex.normal;
+            //Vector3 weight_amounts = Vector3::Normalize(vertex.weight_amounts);//vertex.weight_amounts;//Vector3::Normalize(vertex.weight_amounts);
+			Vector3 weight_amounts = NormSumToOne(vertex.weight_amounts);
+            if (first_flag) {
+            	float length = weight_amounts.x + weight_amounts.y + weight_amounts.z;//Vector3::Length(weight_amounts);
+            	if (fabs(length - 1.0f) > 0.001f) {
+
+            		printf("vertex %d \n", i);
+            		Vector3::Print(weight_amounts);
+            		printf("\n");
+            		Vector3::Print(vertex.weight_ids);
+            		printf("\n");
+            	}
+            }
+			for (int j = 0; j < 3; j++) {
+				int joint_id = (int)round(vertex.weight_ids[j]);
+				float weight = weight_amounts[j];
+				//Vector3 localPos = rest_trans_lc[joint_id] * vertex.position;
+				Matrix_4x4 trans =  curr_trans_gb[joint_id] * rest_trans_lc[joint_id];
+				//Vector3 delta_pos = curr_trans_gb[joint_id] * localPos;
+				Matrix_3x3 rot = Matrix_4x4::ToMatrix_3x3(trans);
+				//Vector3 delta_norm = rot * vertex.normal;
+
+				//update
+				//position = position + (vertex.position * weight);//delta_pos * weight;//vertex.position * weight;
+				position += (trans * vertex.position * weight);
+				//normal += delta_norm * weight;// * weight;
+				normal += (rot * vertex.normal * weight);
+			}
+
+			//position = vertex.position * Vector3::Length(weight_amounts);
+			//position = vertex.position * weight_amounts.x + vertex.position * weight_amounts.y + vertex.position * weight_amounts.z;
+			//position = vertex.position * (weight_amounts.x + weight_amounts.y +  weight_amounts.z);
+			//normal = vertex.normal;
 
 			world_positions_array[(i*3)+0] = position.x;
 			world_positions_array[(i*3)+1] = position.y;
@@ -172,11 +232,14 @@ static void DrawModel() {
 		glDisable(GL_LIGHTING);
     }
 
+    first_flag = false;
+
     delete[] world_positions_array;
     delete[] world_normals_array;
     delete[] triangle_array;
 
-    delete[] rest_trans_gb;
+    delete[] rest_trans_lc;
+    delete[] curr_trans_gb;
 
 }
 
@@ -475,7 +538,9 @@ int main(int argc, char **argv) {
 
     //don't need to free current_animation
     printf("current animation is walking");
-    current_animation = walk_animation;
+    //current_animation = rest_animation;//walk_animation;
+    //current_animation = walk_animation;
+    current_animation = run_animation;
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGB|GLUT_DOUBLE|GLUT_DEPTH|GLUT_MULTISAMPLE);
