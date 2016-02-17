@@ -1,0 +1,19 @@
+# Computer Animation and Visualisation Assessment 1 - Skinning
+
+
+## Compilation
+
+Run "make"
+
+
+## Running
+
+Run ./skinning
+
+
+## Controls
+
+* Click and drag left mouse button on screen to rotate camera
+* Scroll mouse wheel to zoom
+* Escape key to exit
+
