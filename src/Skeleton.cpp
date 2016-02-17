@@ -42,7 +42,15 @@ void Skeleton::SetJoint(int i, Joint j) {
 ** TODO: Implement. This method must return the global transform of a joint
 */
 Matrix_4x4 Skeleton::JointTransform(int i) {
-	Joint joint = this->m_joints;
+	Joint joint = this->GetJoint(i);
+	Matrix_4x4 trans = Matrix_4x4::Translation(joint.position) * joint.rotation;
+	Matrix_4x4 result = trans;
+	while (joint.parent_id != -1) {
+		joint = this->GetJoint(joint.parent_id);
+		trans = Matrix_4x4::Translation(joint.position) * joint.rotation;
+		result = trans * result;
+	}
+	return result;
 }
 
 Skeleton* Skeleton::Copy() {

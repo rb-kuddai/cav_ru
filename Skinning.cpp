@@ -16,6 +16,7 @@
 #define GLUT_WHEEL_DOWN 4
 #endif
 
+
 #include "Vector.h"
 #include "Matrix.h"
 #include "Geometry.h"
@@ -28,9 +29,18 @@ static Mesh* character = NULL;
 static Animation* rest_animation = NULL;
 static Animation* run_animation = NULL;
 static Animation* walk_animation = NULL;
+static Animation* current_animation = NULL;
 
 /* This timer can be used to cycle through the frames of animation */
 static float timer = 0;
+
+/*variables to control the workflow */
+/*display variables */
+static bool show_skeleton = false;
+static bool show_mesh = true;
+
+/*speed of animation*/
+static float frames_per_second = 10.0f;
 
 void Update() {
     timer += 0.05;
@@ -100,58 +110,73 @@ static void DrawModel() {
     float* world_normals_array = new float[character->NumVertices() * 3];
     int* triangle_array = new int[character->NumTriangles() * 3];
 
+
     /*
     ** TODO: Uncomment this once `JointTransform` is implemented to draw
-    ** kotik!!!! YEAH
     **       the skeleton of the character in the rest pose.
     */
 
-    // Skeleton* rest = rest_animation->GetFrame(0);
-    // DrawSkeleton(rest);
-
-    for (int i = 0; i < character->NumVertices(); i++) {
-
-        Vector3 position = character->GetVertex(i).position;
-        Vector3 normal = character->GetVertex(i).normal;
-
-        /*
-        ** TODO: Transform position and normal using rest pose and some
-        **       other animated pose from one of the animations
-        */
-
-        world_positions_array[(i*3)+0] = position.x;
-        world_positions_array[(i*3)+1] = position.y;
-        world_positions_array[(i*3)+2] = position.z;
-
-        world_normals_array[(i*3)+0] = normal.x;
-        world_normals_array[(i*3)+1] = normal.y;
-        world_normals_array[(i*3)+2] = normal.z;
+    //get T pose global transforms
+    Skeleton* rest = rest_animation->GetFrame(0);
+    Matrix_4x4* rest_trans_gb = new Matrix_4x4[rest->NumJoints()];
+    for	(int i = 0; i < rest->NumJoints(); i++) {
+    	rest_trans_gb[i] = rest->JointTransform(i);
     }
 
-    for (int i = 0; i < character->NumTriangles() * 3; i++) {
-        triangle_array[i] = character->GetIndex(i);
+    int current_frame = int(timer * frames_per_second) % current_animation->NumFrames();
+    printf("current frame %d \n", current_frame);
+
+    if (show_skeleton) {
+    	DrawSkeleton(rest);
     }
+    if (show_mesh) {
 
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_LIGHTING);
+		for (int i = 0; i < character->NumVertices(); i++) {
 
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glEnableClientState(GL_NORMAL_ARRAY);
+			Vector3 position = character->GetVertex(i).position;
+			Vector3 normal = character->GetVertex(i).normal;
 
-    glVertexPointer(3, GL_FLOAT, 0, world_positions_array);
-    glNormalPointer(   GL_FLOAT, 0, world_normals_array);
+			/*
+			** TODO: Transform position and normal using rest pose and some
+			**       other animated pose from one of the animations
+			*/
 
-    glDrawElements(GL_TRIANGLES, character->NumTriangles() * 3, GL_UNSIGNED_INT, triangle_array);
+			world_positions_array[(i*3)+0] = position.x;
+			world_positions_array[(i*3)+1] = position.y;
+			world_positions_array[(i*3)+2] = position.z;
 
-    glDisableClientState(GL_VERTEX_ARRAY);
-    glDisableClientState(GL_NORMAL_ARRAY);
+			world_normals_array[(i*3)+0] = normal.x;
+			world_normals_array[(i*3)+1] = normal.y;
+			world_normals_array[(i*3)+2] = normal.z;
+		}
 
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_LIGHTING);
+		for (int i = 0; i < character->NumTriangles() * 3; i++) {
+			triangle_array[i] = character->GetIndex(i);
+		}
+
+		glEnable(GL_DEPTH_TEST);
+		glEnable(GL_LIGHTING);
+
+		glEnableClientState(GL_VERTEX_ARRAY);
+		glEnableClientState(GL_NORMAL_ARRAY);
+
+		glVertexPointer(3, GL_FLOAT, 0, world_positions_array);
+		glNormalPointer(   GL_FLOAT, 0, world_normals_array);
+
+		glDrawElements(GL_TRIANGLES, character->NumTriangles() * 3, GL_UNSIGNED_INT, triangle_array);
+
+		glDisableClientState(GL_VERTEX_ARRAY);
+		glDisableClientState(GL_NORMAL_ARRAY);
+
+		glDisable(GL_DEPTH_TEST);
+		glDisable(GL_LIGHTING);
+    }
 
     delete[] world_positions_array;
     delete[] world_normals_array;
     delete[] triangle_array;
+
+    delete[] rest_trans_gb;
 
 }
 
@@ -248,9 +273,22 @@ void MouseMoveEvent(int x, int y) {
 
 void KeyEvent(unsigned char key, int x, int y) {
     switch (key) {
-    case GLUT_KEY_ESCAPE:
-        exit(EXIT_SUCCESS);
-        break;
+		case GLUT_KEY_ESCAPE:
+			exit(EXIT_SUCCESS);
+			break;
+
+	    case 's':
+	    case 'S':
+	    	//s - for skeleton
+	    	show_skeleton = !show_skeleton;
+	    	break;
+
+	    case 'm':
+	    case 'M':
+	    	//m - for mesh
+	    	show_mesh = !show_mesh;
+	    	break;
+
     }
 }
 
@@ -430,6 +468,14 @@ int main(int argc, char **argv) {
     LoadSMDAnimation("./resources/rest_animation.smd", &rest_animation);
     LoadSMDAnimation("./resources/run_animation.smd",  &run_animation);
     LoadSMDAnimation("./resources/walk_animation.smd",  &walk_animation);
+
+    printf("rest_animation -> number of frames: %d \n", rest_animation->NumFrames());
+    printf("run_animation -> number of frames: %d \n", run_animation->NumFrames());
+    printf("walk_animation -> number of frames: %d \n", walk_animation->NumFrames());
+
+    //don't need to free current_animation
+    printf("current animation is walking");
+    current_animation = walk_animation;
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGB|GLUT_DOUBLE|GLUT_DEPTH|GLUT_MULTISAMPLE);
