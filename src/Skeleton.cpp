@@ -42,6 +42,11 @@ void Skeleton::SetJoint(int i, Joint j) {
 ** TODO: Implement. This method must return the global transform of a joint
 */
 Matrix_4x4 Skeleton::JointTransform(int i) {
+	/* This can be optimised further by storing transforms and then
+	 * check if joint transform has been already calculated for this joint
+	 * or any of its parents. But our skeleton is not big and joint path to the root is relatively short.
+	 * So I have decided to keep the existing skeleton class interface.
+	 */
 	Joint joint = this->GetJoint(i);
 	Matrix_4x4 trans = Matrix_4x4::Translation(joint.position) * joint.rotation;
 	Matrix_4x4 result = trans;

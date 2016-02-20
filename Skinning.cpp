@@ -31,6 +31,17 @@ static Animation* run_animation = NULL;
 static Animation* walk_animation = NULL;
 static Animation* current_animation = NULL;
 
+/*gb - global frame
+ *lc - local frame
+ *tpf - transforms per frame
+ *we need  local only for rest pose
+ */
+static std::vector<Matrix_4x4> rest_trans_lc;
+static std::vector<std::vector<Matrix_4x4> > rest_tpf_gb;
+static std::vector<std::vector<Matrix_4x4> > run_tpf_gb;
+static std::vector<std::vector<Matrix_4x4> > walk_tpf_gb;
+static std::vector<std::vector<Matrix_4x4> > current_tpf_gb;
+
 /* This timer can be used to cycle through the frames of animation */
 static float timer = 0;
 
@@ -41,6 +52,57 @@ static bool show_mesh = true;
 
 /*speed of animation*/
 static float frames_per_second = 10.0f;
+
+//Normalise weights components to one, otherwise strange artifacts
+static Vector3 NormSumToOne(Vector3 v) {
+	//assumes that all components of v are positive;
+	float sum = v.x + v.y + v.z;
+	return Vector3(v.x/sum, v.y/sum, v.z/sum);
+}
+
+//must be called after rest_trans_lc has been initialised
+static Vertex LinearBlending(Vertex& original, std::vector<Matrix_4x4>& anim_trans_gb) {
+	Vector3 pos = Vector3::Zero();
+	Vector3 norm = Vector3::Zero();
+	Vector3 weight_amounts = NormSumToOne(original.weight_amounts);
+	for (int j = 0; j < 3; j++) {
+		int joint_id = (int)round(original.weight_ids[j]);
+		float weight = weight_amounts[j];
+		Matrix_4x4 trans =  anim_trans_gb[joint_id] * rest_trans_lc[joint_id];
+		Matrix_3x3 rot = Matrix_4x4::ToMatrix_3x3(trans);
+		pos += (trans * original.position * weight);
+		norm += (rot * original.normal * weight);
+	}
+	return Vertex(pos, norm);
+}
+
+/*
+ * Global transforms per frame for given animation.
+ * Using vectors to alleviate problems with memory leaks.
+ * Using this signature because it is c++98 and in that it won't be copying values twice as
+ * c++98 doesn't have move constructor.
+ */
+static void ComputeTransPerFrameGB(std::vector<std::vector<Matrix_4x4> >& trans_per_frame_gb, Animation* anim) {
+	trans_per_frame_gb.resize(anim->NumFrames());
+	for (int frame_id = 0; frame_id < anim->NumFrames(); frame_id++) {
+		Skeleton* skel = anim->GetFrame(frame_id);
+		trans_per_frame_gb[frame_id].resize(skel->NumJoints());
+		for (int joint_id = 0; joint_id < skel->NumJoints(); joint_id++) {
+			trans_per_frame_gb[frame_id][joint_id] = skel->JointTransform(joint_id);
+		}
+	}
+}
+
+/*
+ * Compute local transforms for Rest pose
+ */
+static void ComputeRestTransLC(std::vector<Matrix_4x4>& rest_trans_lc, Skeleton* rest_skel) {
+	rest_trans_lc.resize(rest_skel->NumJoints());
+	for (int joint_id = 0; joint_id < rest_skel->NumJoints(); joint_id++) {
+		rest_trans_lc[joint_id] = Matrix_4x4::Inverse(rest_skel->JointTransform(joint_id));
+	}
+}
+
 
 void Update() {
     timer += 0.05;
@@ -69,6 +131,7 @@ static void DrawAxis(Matrix_4x4 origin) {
     glColor4f(0.0, 0.0, 1.0, 1.0);
     glVertex3f(center.x, center.y, center.z);
     glVertex3f(axis_z.x, axis_z.y, axis_z.z);
+
     glEnd();
     glLineWidth(1.0f);
 }
@@ -104,14 +167,6 @@ static void DrawSkeleton(Skeleton* skeleton) {
 
 }
 
-static bool first_flag = true;
-
-static Vector3 NormSumToOne(Vector3 v) {
-	//assumes that all components of v are positive;
-	float sum = v.x + v.y + v.z;
-	return Vector3(v.x/sum, v.y/sum, v.z/sum);
-}
-
 static void DrawModel() {
 
     float* world_positions_array = new float[character->NumVertices() * 3];
@@ -123,37 +178,12 @@ static void DrawModel() {
     ** TODO: Uncomment this once `JointTransform` is implemented to draw
     **       the skeleton of the character in the rest pose.
     */
-
-    // INITIALISE TRANSFORMS IN ADVANCE FOR EACH FRAME ------------------------------------
-
-    Skeleton* rest_skel = rest_animation->GetFrame(0);
-    //initialise rest animation transforms
-    //gb - global, lc - local
-    Matrix_4x4* rest_trans_lc = new Matrix_4x4[rest_skel->NumJoints()];
-    //Matrix_3x3* rest_rot_lc = new Matrix_3x3[rest_skel->NumJoints()];
-    for	(int i = 0; i < rest_skel->NumJoints(); i++) {
-    	//maybe precompute this part somewhere else as it is frame independent
-    	Matrix_4x4 trans_gb = rest_skel->JointTransform(i);
-    	rest_trans_lc[i] = Matrix_4x4::Inverse(trans_gb);
-    	//rest_rot_lc[i] = Matrix_4x4::ToMatrix_3x3(rest_trans_lc[i]);
-    }
-
-    /* transform for current frame and current animation */
-
     int curr_anim_frame = int(timer * frames_per_second) % current_animation->NumFrames();
-    //printf("current frame %d \n", current_frame);
-
-    Skeleton* curr_skel = current_animation->GetFrame(curr_anim_frame);
-
-    Matrix_4x4* curr_trans_gb = new Matrix_4x4[rest_skel->NumJoints()];
-    for	(int i = 0; i < curr_skel->NumJoints(); i++) {
-    	curr_trans_gb[i] = curr_skel->JointTransform(i);
-    }
 
     //VISUALIZATION PART -----------------------------------------------------------------
 
     if (show_skeleton) {
-    	DrawSkeleton(curr_skel);
+    	DrawSkeleton(current_animation->GetFrame(curr_anim_frame));
     }
 
     if (show_mesh) {
@@ -163,51 +193,16 @@ static void DrawModel() {
 			** TODO: Transform position and normal using rest pose and some
 			**       other animated pose from one of the animations
 			*/
+			Vertex vrtx_original = character->GetVertex(i);
+			Vertex vrtx_blended = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
 
-			Vertex vertex = character->GetVertex(i);
-			Vector3 position = Vector3::Zero();//vertex.position;
-			Vector3 normal = Vector3::Zero();//vertex.normal;
-            //Vector3 weight_amounts = Vector3::Normalize(vertex.weight_amounts);//vertex.weight_amounts;//Vector3::Normalize(vertex.weight_amounts);
-			Vector3 weight_amounts = NormSumToOne(vertex.weight_amounts);
-            if (first_flag) {
-            	float length = weight_amounts.x + weight_amounts.y + weight_amounts.z;//Vector3::Length(weight_amounts);
-            	if (fabs(length - 1.0f) > 0.001f) {
+			world_positions_array[(i*3)+0] = vrtx_blended.position.x;
+			world_positions_array[(i*3)+1] = vrtx_blended.position.y;
+			world_positions_array[(i*3)+2] = vrtx_blended.position.z;
 
-            		printf("vertex %d \n", i);
-            		Vector3::Print(weight_amounts);
-            		printf("\n");
-            		Vector3::Print(vertex.weight_ids);
-            		printf("\n");
-            	}
-            }
-			for (int j = 0; j < 3; j++) {
-				int joint_id = (int)round(vertex.weight_ids[j]);
-				float weight = weight_amounts[j];
-				//Vector3 localPos = rest_trans_lc[joint_id] * vertex.position;
-				Matrix_4x4 trans =  curr_trans_gb[joint_id] * rest_trans_lc[joint_id];
-				//Vector3 delta_pos = curr_trans_gb[joint_id] * localPos;
-				Matrix_3x3 rot = Matrix_4x4::ToMatrix_3x3(trans);
-				//Vector3 delta_norm = rot * vertex.normal;
-
-				//update
-				//position = position + (vertex.position * weight);//delta_pos * weight;//vertex.position * weight;
-				position += (trans * vertex.position * weight);
-				//normal += delta_norm * weight;// * weight;
-				normal += (rot * vertex.normal * weight);
-			}
-
-			//position = vertex.position * Vector3::Length(weight_amounts);
-			//position = vertex.position * weight_amounts.x + vertex.position * weight_amounts.y + vertex.position * weight_amounts.z;
-			//position = vertex.position * (weight_amounts.x + weight_amounts.y +  weight_amounts.z);
-			//normal = vertex.normal;
-
-			world_positions_array[(i*3)+0] = position.x;
-			world_positions_array[(i*3)+1] = position.y;
-			world_positions_array[(i*3)+2] = position.z;
-
-			world_normals_array[(i*3)+0] = normal.x;
-			world_normals_array[(i*3)+1] = normal.y;
-			world_normals_array[(i*3)+2] = normal.z;
+			world_normals_array[(i*3)+0] = vrtx_blended.normal.x;
+			world_normals_array[(i*3)+1] = vrtx_blended.normal.y;
+			world_normals_array[(i*3)+2] = vrtx_blended.normal.z;
 		}
 
 		for (int i = 0; i < character->NumTriangles() * 3; i++) {
@@ -232,15 +227,10 @@ static void DrawModel() {
 		glDisable(GL_LIGHTING);
     }
 
-    first_flag = false;
 
     delete[] world_positions_array;
     delete[] world_normals_array;
     delete[] triangle_array;
-
-    delete[] rest_trans_lc;
-    delete[] curr_trans_gb;
-
 }
 
 static const int WIDTH = 800;
@@ -269,6 +259,27 @@ void Draw() {
               0.0, 1.0, 0.0);
 
     DrawModel();
+
+    //experiments with text
+    std::string menu = "Hello!\n World";
+    glMatrixMode( GL_PROJECTION );
+    glPushMatrix();
+    glLoadIdentity();
+    gluOrtho2D( 0, WIDTH, 0, HEIGHT);
+
+    glMatrixMode( GL_MODELVIEW );
+    glPushMatrix();
+    glLoadIdentity();
+    glRasterPos2i(50, 50);  // move in 10 pixels from the left and bottom edges
+    for ( int i = 0; i < menu.length(); ++i ) {
+        glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, menu[i]);
+    }
+    glPopMatrix();
+
+    glMatrixMode( GL_PROJECTION );
+    glPopMatrix();
+    glMatrixMode( GL_MODELVIEW );
+    //experiments end
 
     glutSwapBuffers();
 }
@@ -536,11 +547,18 @@ int main(int argc, char **argv) {
     printf("run_animation -> number of frames: %d \n", run_animation->NumFrames());
     printf("walk_animation -> number of frames: %d \n", walk_animation->NumFrames());
 
+    //compute initial transforms
+    ComputeRestTransLC(rest_trans_lc, rest_animation->GetFrame(0));
+    ComputeTransPerFrameGB(rest_tpf_gb, rest_animation);
+    ComputeTransPerFrameGB(run_tpf_gb, run_animation);
+    ComputeTransPerFrameGB(walk_tpf_gb, walk_animation);
+
     //don't need to free current_animation
     printf("current animation is walking");
     //current_animation = rest_animation;//walk_animation;
-    //current_animation = walk_animation;
-    current_animation = run_animation;
+    current_animation = rest_animation;
+    current_tpf_gb = rest_tpf_gb;
+    //current_animation = run_animation;
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGB|GLUT_DOUBLE|GLUT_DEPTH|GLUT_MULTISAMPLE);
@@ -576,8 +594,8 @@ int main(int argc, char **argv) {
     delete character;
     delete rest_animation;
     delete run_animation;
-
+    //there was a bug in the original code. The memory for walk animation hasn't been freed
+    delete walk_animation;
 }
 
-//kotik
 
