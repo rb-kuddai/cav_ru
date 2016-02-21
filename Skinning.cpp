@@ -24,11 +24,26 @@
 #include "Animation.h"
 #include "Camera.h"
 
+#include <sstream>
+
+//mouse interface, camera
+static const int WIDTH = 800;
+static const int HEIGHT = 600;
+
+static int mouse_left_pressed = 0;
+static int mouse_right_pressed = 0;
+
+static int last_x = -1;
+static int last_y = -1;
+
+static Camera* camera = NULL;
+
 static Mesh* character = NULL;
 
 static Animation* rest_animation = NULL;
 static Animation* run_animation = NULL;
 static Animation* walk_animation = NULL;
+
 static Animation* current_animation = NULL;
 
 /*gb - global frame
@@ -44,14 +59,30 @@ static std::vector<std::vector<Matrix_4x4> > current_tpf_gb;
 
 /* This timer can be used to cycle through the frames of animation */
 static float timer = 0;
+static float timer_glut = 0;
 
 /*variables to control the workflow */
 /*display variables */
+static std::string hint="Default Mode";
 static bool show_skeleton = false;
 static bool show_mesh = true;
+static bool interpolate = false;
 
 /*speed of animation*/
-static float frames_per_second = 10.0f;
+static float frames_per_second = 30.0f;
+static float max_frames_per_second = 30.0f;
+static float min_frames_per_second = 1.0f;
+
+/* to keep animation speed within certain limit */
+static float Clamp(float n, float lower, float upper) {
+	return std::max(lower, std::min(n, upper));
+}
+
+static std::string Int2String(int n) {
+    std::ostringstream oss;
+    oss << n;
+    return oss.str();
+}
 
 //Normalise weights components to one, otherwise strange artifacts
 static Vector3 NormSumToOne(Vector3 v) {
@@ -103,9 +134,35 @@ static void ComputeRestTransLC(std::vector<Matrix_4x4>& rest_trans_lc, Skeleton*
 	}
 }
 
+void DrawTextHint() {
+	//relying on http://stackoverflow.com/questions/20866508/using-glut-to-simply-print-text
+	glMatrixMode( GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+	gluOrtho2D(0, WIDTH, 0, HEIGHT);
+	glMatrixMode( GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+	//blue color
+	glColor4f(0.0, 0.0, 1.0, 1.0);
+	glRasterPos2i(10, 10); // move in 10 pixels from the left and bottom edges
+	for (size_t i = 0; i < hint.length(); ++i) {
+		glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, hint[i]);
+	}
+	glPopMatrix();
+	glMatrixMode( GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode( GL_MODELVIEW);
+}
+
 
 void Update() {
     timer += 0.05;
+    //time since start (glutGet(GLUT_ELAPSED_TIME) gives milliseconds, so divide by 1000)
+    timer_glut = glutGet(GLUT_ELAPSED_TIME)/1000.f;
+    //std::ostringstream oss;
+    //oss << timer_glut;
+    //hint = oss.str();
     glutPostRedisplay();
 }
 
@@ -164,7 +221,45 @@ static void DrawSkeleton(Skeleton* skeleton) {
     for(int i = 0; i < skeleton->NumJoints(); i++) {
         DrawAxis(skeleton->JointTransform(i));
     }
+}
 
+// t - interpolation parameter between 0 and 1
+static void DrawSkeletonInterpolated(Skeleton* skel_1, Skeleton* skel_2, float t) {
+	if (skel_1->NumJoints() != skel_2->NumJoints()) {
+		printf("Number of joints in the skeletons doesn't match!");
+		return;
+	}
+    glColor4f(0.0, 0.0, 0.0, 1.0);
+    glLineWidth(2.0f);
+
+    glBegin(GL_LINES);
+
+    for (int i = 0; i < skel_1->NumJoints(); i++) {
+        int parent_id1 = skel_1->GetJoint(i).parent_id;
+        if (parent_id1 == -1) continue;
+
+        Vector3 bone_pos1 = skel_1->JointTransform(i) * Vector3::Zero();
+        Vector3 parent_pos1 = skel_1->JointTransform(parent_id1) * Vector3::Zero();
+
+        //second
+        int parent_id2 = skel_2->GetJoint(i).parent_id;
+        if (parent_id2 == -1) continue;
+
+        Vector3 bone_pos2 = skel_2->JointTransform(i) * Vector3::Zero();
+        Vector3 parent_pos2 = skel_2->JointTransform(parent_id2) * Vector3::Zero();
+
+        //interpolation
+
+        Vector3 bone_pos = bone_pos1 * (1-t) + bone_pos2 * t;
+        Vector3 parent_pos = parent_pos1 * (1-t) + parent_pos2 * t;
+        glVertex3f(bone_pos.x, bone_pos.y, bone_pos.z);
+        glVertex3f(parent_pos.x, parent_pos.y, parent_pos.z);
+    }
+
+    glEnd();
+
+    glLineWidth(1.0f);
+    glColor4f(1.0, 1.0, 1.0, 1.0);
 }
 
 static void DrawModel() {
@@ -178,12 +273,19 @@ static void DrawModel() {
     ** TODO: Uncomment this once `JointTransform` is implemented to draw
     **       the skeleton of the character in the rest pose.
     */
-    int curr_anim_frame = int(timer * frames_per_second) % current_animation->NumFrames();
-
+    int curr_anim_frame = int(timer_glut * frames_per_second) % current_animation->NumFrames();
+    //time interpolation parameter between 0 and 1
+	float t = timer_glut * frames_per_second - int(timer_glut * frames_per_second);
+	t = Clamp(t, 0, 1);
+	int next_anim_frame = (curr_anim_frame + 1) % current_animation->NumFrames();
     //VISUALIZATION PART -----------------------------------------------------------------
 
     if (show_skeleton) {
-    	DrawSkeleton(current_animation->GetFrame(curr_anim_frame));
+    	if (interpolate) {
+    		DrawSkeletonInterpolated(current_animation->GetFrame(curr_anim_frame), current_animation->GetFrame(next_anim_frame), t);
+    	} else {
+    		DrawSkeleton(current_animation->GetFrame(curr_anim_frame));
+    	}
     }
 
     if (show_mesh) {
@@ -194,15 +296,23 @@ static void DrawModel() {
 			**       other animated pose from one of the animations
 			*/
 			Vertex vrtx_original = character->GetVertex(i);
-			Vertex vrtx_blended = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
+			Vertex vrtx;
+			if (interpolate) {
+				Vertex vrtx_1 = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
+				Vertex vrtx_2 = LinearBlending(vrtx_original, current_tpf_gb[next_anim_frame]);
+				vrtx.position = vrtx_1.position * (1-t) + vrtx_2.position * t;
+				vrtx.normal   = vrtx_1.normal * (1-t) + vrtx_2.normal * t;
+			} else {
+				vrtx = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
+			}
 
-			world_positions_array[(i*3)+0] = vrtx_blended.position.x;
-			world_positions_array[(i*3)+1] = vrtx_blended.position.y;
-			world_positions_array[(i*3)+2] = vrtx_blended.position.z;
+			world_positions_array[(i*3)+0] = vrtx.position.x;
+			world_positions_array[(i*3)+1] = vrtx.position.y;
+			world_positions_array[(i*3)+2] = vrtx.position.z;
 
-			world_normals_array[(i*3)+0] = vrtx_blended.normal.x;
-			world_normals_array[(i*3)+1] = vrtx_blended.normal.y;
-			world_normals_array[(i*3)+2] = vrtx_blended.normal.z;
+			world_normals_array[(i*3)+0] = vrtx.normal.x;
+			world_normals_array[(i*3)+1] = vrtx.normal.y;
+			world_normals_array[(i*3)+2] = vrtx.normal.z;
 		}
 
 		for (int i = 0; i < character->NumTriangles() * 3; i++) {
@@ -233,17 +343,6 @@ static void DrawModel() {
     delete[] triangle_array;
 }
 
-static const int WIDTH = 800;
-static const int HEIGHT = 600;
-
-static int mouse_left_pressed = 0;
-static int mouse_right_pressed = 0;
-
-static int last_x = -1;
-static int last_y = -1;
-
-static Camera* camera = NULL;
-
 void Draw() {
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -259,27 +358,7 @@ void Draw() {
               0.0, 1.0, 0.0);
 
     DrawModel();
-
-    //experiments with text
-    std::string menu = "Hello!\n World";
-    glMatrixMode( GL_PROJECTION );
-    glPushMatrix();
-    glLoadIdentity();
-    gluOrtho2D( 0, WIDTH, 0, HEIGHT);
-
-    glMatrixMode( GL_MODELVIEW );
-    glPushMatrix();
-    glLoadIdentity();
-    glRasterPos2i(50, 50);  // move in 10 pixels from the left and bottom edges
-    for ( int i = 0; i < menu.length(); ++i ) {
-        glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, menu[i]);
-    }
-    glPopMatrix();
-
-    glMatrixMode( GL_PROJECTION );
-    glPopMatrix();
-    glMatrixMode( GL_MODELVIEW );
-    //experiments end
+	DrawTextHint();
 
     glutSwapBuffers();
 }
@@ -355,14 +434,47 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    case 'S':
 	    	//s - for skeleton
 	    	show_skeleton = !show_skeleton;
+	    	hint = (show_skeleton) ? "Show Skeleton: ON" : "Show Skeleton: OFF";
 	    	break;
 
 	    case 'm':
 	    case 'M':
 	    	//m - for mesh
 	    	show_mesh = !show_mesh;
+	    	hint = (show_mesh) ? "Show Mesh: ON" : "Show Mesh: OFF";
+	    	break;
+	    //controlling animation speed
+	    case 'j':
+	    case 'J':
+	    	frames_per_second -= 1;
+	    	frames_per_second = Clamp(frames_per_second, min_frames_per_second, max_frames_per_second);
+	    	hint = "Animation Speed: " + Int2String(((int)frames_per_second));
+	    	break;
+	    case 'k':
+	    case 'K':
+	    	frames_per_second += 1;
+	    	frames_per_second = Clamp(frames_per_second, min_frames_per_second, max_frames_per_second);
+	    	hint = "Animation Speed: " + Int2String(((int)frames_per_second));
 	    	break;
 
+	    case 'w':
+	    case 'W':
+	    	current_animation = walk_animation;
+	    	current_tpf_gb = walk_tpf_gb;
+	    	hint = "Current Animation: Walk";
+	    	break;
+	    case 'r':
+	    case 'R':
+	    	current_animation = run_animation;
+	    	current_tpf_gb = run_tpf_gb;
+	    	hint = "Current Animation: Run";
+	    	break;
+
+	    case 'i':
+	    case 'I':
+	    	interpolate = !interpolate;
+	    	hint = (interpolate) ? "Interpolation: ON" : "Interpolation: OFF";
+	    	break;
     }
 }
 
@@ -555,10 +667,12 @@ int main(int argc, char **argv) {
 
     //don't need to free current_animation
     printf("current animation is walking");
-    //current_animation = rest_animation;//walk_animation;
-    current_animation = rest_animation;
-    current_tpf_gb = rest_tpf_gb;
-    //current_animation = run_animation;
+    //current_animation = rest_animation;
+    //current_tpf_gb = rest_tpf_gb;
+    //current_animation = walk_animation;
+    //current_tpf_gb = walk_tpf_gb;
+    current_animation = run_animation;
+    current_tpf_gb = run_tpf_gb;
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGB|GLUT_DOUBLE|GLUT_DEPTH|GLUT_MULTISAMPLE);
