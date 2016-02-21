@@ -67,11 +67,14 @@ static std::string hint="Default Mode";
 static bool show_skeleton = false;
 static bool show_mesh = true;
 static bool interpolate = false;
+static bool frame_mode = false;
 
 /*speed of animation*/
-static float frames_per_second = 30.0f;
+static float frames_per_second = 1.0f;
 static float max_frames_per_second = 30.0f;
 static float min_frames_per_second = 1.0f;
+
+static int selected_frame = 0;
 
 /* to keep animation speed within certain limit */
 static float Clamp(float n, float lower, float upper) {
@@ -273,11 +276,18 @@ static void DrawModel() {
     ** TODO: Uncomment this once `JointTransform` is implemented to draw
     **       the skeleton of the character in the rest pose.
     */
+
     int curr_anim_frame = int(timer_glut * frames_per_second) % current_animation->NumFrames();
     //time interpolation parameter between 0 and 1
 	float t = timer_glut * frames_per_second - int(timer_glut * frames_per_second);
 	t = Clamp(t, 0, 1);
 	int next_anim_frame = (curr_anim_frame + 1) % current_animation->NumFrames();
+	//just displaying required frame
+	if (frame_mode) {
+		curr_anim_frame = selected_frame;
+		next_anim_frame = selected_frame;
+		t = 0;
+	}
     //VISUALIZATION PART -----------------------------------------------------------------
 
     if (show_skeleton) {
@@ -424,6 +434,19 @@ void MouseMoveEvent(int x, int y) {
 
 }
 
+void ChangeFrames(int value) {
+	if (frame_mode) {
+		selected_frame += value;
+	    int max_frames = current_animation->NumFrames() - 1;
+	    selected_frame = Clamp(selected_frame, 0, max_frames);
+		hint = "Current Frame: " + Int2String(selected_frame);
+	} else {
+		frames_per_second += value;
+	    frames_per_second = Clamp(frames_per_second, min_frames_per_second, max_frames_per_second);
+		hint = "Animation Speed: " + Int2String(((int)frames_per_second));
+	}
+}
+
 void KeyEvent(unsigned char key, int x, int y) {
     switch (key) {
 		case GLUT_KEY_ESCAPE:
@@ -446,15 +469,11 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    //controlling animation speed
 	    case 'j':
 	    case 'J':
-	    	frames_per_second -= 1;
-	    	frames_per_second = Clamp(frames_per_second, min_frames_per_second, max_frames_per_second);
-	    	hint = "Animation Speed: " + Int2String(((int)frames_per_second));
+	    	ChangeFrames(-1);
 	    	break;
 	    case 'k':
 	    case 'K':
-	    	frames_per_second += 1;
-	    	frames_per_second = Clamp(frames_per_second, min_frames_per_second, max_frames_per_second);
-	    	hint = "Animation Speed: " + Int2String(((int)frames_per_second));
+	    	ChangeFrames(+1);
 	    	break;
 
 	    case 'w':
@@ -475,7 +494,14 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    	interpolate = !interpolate;
 	    	hint = (interpolate) ? "Interpolation: ON" : "Interpolation: OFF";
 	    	break;
+
+	    case 'f':
+	    case 'F':
+	    	frame_mode = !frame_mode;
+	    	hint = (frame_mode) ? "Frame Mode: ON" : "Frame Mode: OFF";
+	    	break;
     }
+
 }
 
 enum {
@@ -669,10 +695,10 @@ int main(int argc, char **argv) {
     printf("current animation is walking");
     //current_animation = rest_animation;
     //current_tpf_gb = rest_tpf_gb;
-    //current_animation = walk_animation;
-    //current_tpf_gb = walk_tpf_gb;
-    current_animation = run_animation;
-    current_tpf_gb = run_tpf_gb;
+    current_animation = walk_animation;
+    current_tpf_gb = walk_tpf_gb;
+    //current_animation = run_animation;
+    //current_tpf_gb = run_tpf_gb;
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGB|GLUT_DOUBLE|GLUT_DEPTH|GLUT_MULTISAMPLE);
