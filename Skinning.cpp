@@ -57,6 +57,9 @@ static std::vector<std::vector<Matrix_4x4> > run_tpf_gb;
 static std::vector<std::vector<Matrix_4x4> > walk_tpf_gb;
 static std::vector<std::vector<Matrix_4x4> > current_tpf_gb;
 
+//matches between walk and run frames
+std::vector<std::pair<int, int> > matches;
+
 /* This timer can be used to cycle through the frames of animation */
 static float timer = 0;
 static float timer_glut = 0;
@@ -68,9 +71,10 @@ static bool show_skeleton = false;
 static bool show_mesh = true;
 static bool interpolate = false;
 static bool frame_mode = false;
+static bool mix_anim = false;
 
 /*speed of animation*/
-static float frames_per_second = 1.0f;
+static float frames_per_second = 30.0f;
 static float max_frames_per_second = 30.0f;
 static float min_frames_per_second = 1.0f;
 
@@ -134,6 +138,80 @@ static void ComputeRestTransLC(std::vector<Matrix_4x4>& rest_trans_lc, Skeleton*
 	rest_trans_lc.resize(rest_skel->NumJoints());
 	for (int joint_id = 0; joint_id < rest_skel->NumJoints(); joint_id++) {
 		rest_trans_lc[joint_id] = Matrix_4x4::Inverse(rest_skel->JointTransform(joint_id));
+	}
+}
+
+static float ComputeDistSkel(std::vector<Matrix_4x4>& trans_gb_1, std::vector<Matrix_4x4>& trans_gb_2) {
+	if (trans_gb_1.size() != trans_gb_2.size()) {
+		printf("The sizes of joints don't match");
+		return 1000000000000;
+	}
+
+	float distance = 0;
+	for (size_t joint_id = 0; joint_id < trans_gb_1.size(); joint_id++) {
+		Vector3 bone_pos1 = trans_gb_1[joint_id] * Vector3::Zero();
+		Vector3 bone_pos2 = trans_gb_2[joint_id] * Vector3::Zero();
+		distance += Vector3::Distance(bone_pos1, bone_pos2);
+	}
+	return distance;
+}
+
+static void ComputeWalkRunDists(std::vector<std::vector<float> >& dists) {
+	int num_run  = run_animation->NumFrames();
+	int num_walk = walk_animation->NumFrames();
+	// first index - walk frame, second index - run frame
+
+	dists.resize(num_walk);
+
+	for (int walk_id = 0; walk_id < num_walk; walk_id++) {
+		dists[walk_id].resize(num_run);
+		for (int run_id = 0; run_id < num_run; run_id++) {
+			dists[walk_id][run_id] = ComputeDistSkel(run_tpf_gb[run_id], walk_tpf_gb[walk_id]);
+		}
+	}
+}
+
+static void ComputeWalkRunMatches(std::vector<std::pair<int, int> >& matches, std::vector<std::vector<float> >& dists) {
+	int num_run  = run_animation->NumFrames();
+	int num_walk = walk_animation->NumFrames();
+	//found manually by observing logs
+	int len_blend = 40 * 8;
+	int walk_id = 0;
+	int run_id  = 9;
+	//float min_run_dist = 1000000000000;
+	//find the best match between first frame of walk and running animation
+	//for (int j = 0; j < num_run; j++) {
+	//	float dist = dists[walk_id][j];
+	//	if (dist < min_run_dist) {
+	//		run_id = j;
+	//		min_run_dist = dist;
+	//	}
+	//}
+
+	int prev_step = 0;// 1 - horiz, 2 - vert, 3 - diag
+	matches.push_back(std::make_pair(walk_id, run_id));
+	for (int i = 1; i < len_blend; i++) {
+		float dist01 = dists[(walk_id) % num_walk][(run_id + 1) % num_run]; //horiz
+		float dist10 = dists[(walk_id + 1) % num_walk][(run_id) % num_run]; //vert
+		float dist11 = dists[(walk_id + 1) % num_walk][(run_id + 1) % num_run];// diag
+
+		//if dist 01 is smallest
+		if        (dist01 < dist10 && dist01 < dist11 && prev_step != 1) {
+			walk_id = (walk_id) % num_walk;
+			run_id  = (run_id + 1) % num_run;
+			prev_step = 1; //horiz
+
+		} else if (dist10 < dist01 && dist10 < dist11 && prev_step != 2) {
+			walk_id = (walk_id + 1) % num_walk;
+			run_id  = (run_id) % num_run;
+			prev_step = 2; //vert
+		} else {
+			//no choices left going diagonal
+			walk_id = (walk_id + 1) % num_walk;
+			run_id  = (run_id + 1) % num_run;
+			prev_step = 3;//diag
+		}
+		matches.push_back(std::make_pair(walk_id, run_id));
 	}
 }
 
@@ -266,11 +344,9 @@ static void DrawSkeletonInterpolated(Skeleton* skel_1, Skeleton* skel_2, float t
 }
 
 static void DrawModel() {
-
     float* world_positions_array = new float[character->NumVertices() * 3];
     float* world_normals_array = new float[character->NumVertices() * 3];
     int* triangle_array = new int[character->NumTriangles() * 3];
-
 
     /*
     ** TODO: Uncomment this once `JointTransform` is implemented to draw
@@ -291,8 +367,18 @@ static void DrawModel() {
     //VISUALIZATION PART -----------------------------------------------------------------
 
     if (show_skeleton) {
-    	if (interpolate) {
-    		DrawSkeletonInterpolated(current_animation->GetFrame(curr_anim_frame), current_animation->GetFrame(next_anim_frame), t);
+    	if (mix_anim) {
+    		int curr_mix_frame = int(timer_glut * frames_per_second) % matches.size();
+    		int walk_frame = matches[curr_mix_frame].first;
+    		int run_frame  = matches[curr_mix_frame].second;
+    		float mix_rate = 0.5;
+    		DrawSkeletonInterpolated(walk_animation->GetFrame(walk_frame),
+    								 run_animation->GetFrame(run_frame),
+					                 mix_rate);
+    	} else if (interpolate) {
+    		DrawSkeletonInterpolated(current_animation->GetFrame(curr_anim_frame),
+    								 current_animation->GetFrame(next_anim_frame),
+					                 t);
     	} else {
     		DrawSkeleton(current_animation->GetFrame(curr_anim_frame));
     	}
@@ -500,6 +586,13 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    	frame_mode = !frame_mode;
 	    	hint = (frame_mode) ? "Frame Mode: ON" : "Frame Mode: OFF";
 	    	break;
+
+	    case 'b':
+	    case 'B':
+	    	//b - blend/mix walk and run animation
+	    	mix_anim = !mix_anim;
+	    	hint = (mix_anim) ? "Mix walk/run: ON" : "Mix walk/run: OFF";
+	    	break;
     }
 
 }
@@ -699,6 +792,38 @@ int main(int argc, char **argv) {
     current_tpf_gb = walk_tpf_gb;
     //current_animation = run_animation;
     //current_tpf_gb = run_tpf_gb;
+
+    //compute distance between animations
+
+    std::vector<std::vector<float> > dists;
+    ComputeWalkRunDists(dists);
+
+	printf("\n\n");
+	printf("Walk/Run distance table:\n");
+	printf("run  id: ");//run header
+	for (int run_id = 0; run_id < run_animation->NumFrames(); run_id++) {
+		printf("%5d ", run_id);
+	}
+	printf("\n");
+
+	for (int walk_id = 0; walk_id < dists.size(); walk_id++) {
+		printf("walk %2d: ", walk_id);//walk header
+		for (int run_id = 0; run_id < dists[walk_id].size(); run_id++) {
+			printf("%3.1f ", dists[walk_id][run_id]);
+		}
+		printf(";\n");
+	}
+	printf("\n\n");
+
+
+
+	ComputeWalkRunMatches(matches, dists);
+
+	printf("Sequence of most suitable frames for blending, first - walk, second - run\n");
+	for (int i = 0; i < matches.size(); i++) {
+		printf("(%d, %d);  ", matches[i].first, matches[i].second);
+	}
+	printf("\n");
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGB|GLUT_DOUBLE|GLUT_DEPTH|GLUT_MULTISAMPLE);
