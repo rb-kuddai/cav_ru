@@ -171,26 +171,25 @@ static void ComputeWalkRunDists(std::vector<std::vector<float> >& dists) {
 	}
 }
 
-static void ComputeWalkRunMatches(std::vector<std::pair<int, int> >& matches, std::vector<std::vector<float> >& dists) {
+static void ComputeWalkRunMatches(std::vector<std::pair<int, int> >& matches, std::vector<std::vector<float> >& dists, int anim_length) {
 	int num_run  = run_animation->NumFrames();
 	int num_walk = walk_animation->NumFrames();
 	//found manually by observing logs
-	int len_blend = 40 * 8;
 	int walk_id = 0;
 	int run_id  = 9;
-	//float min_run_dist = 1000000000000;
+	float min_run_dist = 1000000000000;
 	//find the best match between first frame of walk and running animation
-	//for (int j = 0; j < num_run; j++) {
-	//	float dist = dists[walk_id][j];
-	//	if (dist < min_run_dist) {
-	//		run_id = j;
-	//		min_run_dist = dist;
-	//	}
-	//}
+	for (int j = 0; j < num_run; j++) {
+		float dist = dists[walk_id][j];
+		if (dist < min_run_dist) {
+			run_id = j;
+			min_run_dist = dist;
+		}
+	}
 
 	int prev_step = 0;// 1 - horiz, 2 - vert, 3 - diag
 	matches.push_back(std::make_pair(walk_id, run_id));
-	for (int i = 1; i < len_blend; i++) {
+	for (int i = 1; i < anim_length; i++) {
 		float dist01 = dists[(walk_id) % num_walk][(run_id + 1) % num_run]; //horiz
 		float dist10 = dists[(walk_id + 1) % num_walk][(run_id) % num_run]; //vert
 		float dist11 = dists[(walk_id + 1) % num_walk][(run_id + 1) % num_run];// diag
@@ -212,6 +211,33 @@ static void ComputeWalkRunMatches(std::vector<std::pair<int, int> >& matches, st
 			prev_step = 3;//diag
 		}
 		matches.push_back(std::make_pair(walk_id, run_id));
+	}
+}
+
+static void ComputeWalkRunLoop(std::vector<std::pair<int, int> >& raw_matches, std::vector<std::pair<int, int> >& matches) {
+	int run_frame = -1;
+	int prev_mix_frame = -1;
+	int T = -1; //period
+	for (int mix_frame=0; mix_frame < raw_matches.size(); mix_frame++) {
+		if (raw_matches[mix_frame].first != 0) {
+			continue;
+		}
+		if (run_frame == raw_matches[mix_frame].second) {
+			T = mix_frame - prev_mix_frame;
+			break;
+		} else {
+			run_frame = raw_matches[mix_frame].second;
+			prev_mix_frame = mix_frame;
+		}
+	}
+	if (T == -1) {
+		printf("\n Haven't found loop for mixed animation, just copy raw mixed animation. Try more frames of raw animation\n");
+		matches = raw_matches;
+	} else {
+		printf("\n Have found loop for mixed walk/run animation with period %d \n", T);
+		for (int mix_frame = prev_mix_frame; mix_frame < (prev_mix_frame + T); mix_frame++) {
+			matches.push_back(raw_matches[mix_frame]);
+		}
 	}
 }
 
@@ -815,11 +841,21 @@ int main(int argc, char **argv) {
 	}
 	printf("\n\n");
 
+	//how many steps to try to reach loop convergence of two animations
+	int num_frames_raw_animation = walk_animation->NumFrames() * 10;
+	std::vector<std::pair<int, int> > raw_matches;
+	ComputeWalkRunMatches(raw_matches, dists, num_frames_raw_animation);
+
+	printf("\nRaw sequence of most suitable frames for blending, first - walk, second - run\n");
+	for (int i = 0; i < raw_matches.size(); i++) {
+		printf("(%d, %d);  ", raw_matches[i].first, raw_matches[i].second);
+	}
+	printf("\n");
 
 
-	ComputeWalkRunMatches(matches, dists);
+	ComputeWalkRunLoop(raw_matches, matches);
 
-	printf("Sequence of most suitable frames for blending, first - walk, second - run\n");
+	printf("\nPruned sequence of most suitable frames for blending, first - walk, second - run\n");
 	for (int i = 0; i < matches.size(); i++) {
 		printf("(%d, %d);  ", matches[i].first, matches[i].second);
 	}
