@@ -74,8 +74,9 @@ static bool frame_mode = false;
 static bool mix_anim = false;
 
 /*speed of animation*/
+static float global_frame = 0.0f;
 static float frames_per_second = 30.0f;
-static float max_frames_per_second = 30.0f;
+static float max_frames_per_second = 40.0f;
 static float min_frames_per_second = 1.0f;
 
 static int selected_frame = 0;
@@ -265,11 +266,11 @@ void DrawTextHint() {
 
 void Update() {
     timer += 0.05;
+    //delta time since last update in seconds
+    float deltaTime = glutGet(GLUT_ELAPSED_TIME)/1000.f - timer_glut;
     //time since start (glutGet(GLUT_ELAPSED_TIME) gives milliseconds, so divide by 1000)
     timer_glut = glutGet(GLUT_ELAPSED_TIME)/1000.f;
-    //std::ostringstream oss;
-    //oss << timer_glut;
-    //hint = oss.str();
+    global_frame += deltaTime * frames_per_second;
     glutPostRedisplay();
 }
 
@@ -330,6 +331,12 @@ static void DrawSkeleton(Skeleton* skeleton) {
     }
 }
 
+static Vector3 InterpolateSkels(Skeleton* skel_1, int id1, Skeleton* skel_2, int id2, float t) {
+	Vector3 v1 = skel_1->JointTransform(id1) * Vector3::Zero();
+	Vector3 v2 = skel_2->JointTransform(id2) * Vector3::Zero();
+	return v1 * (1-t) + v2 * t;
+}
+
 // t - interpolation parameter between 0 and 1
 static void DrawSkeletonInterpolated(Skeleton* skel_1, Skeleton* skel_2, float t) {
 	if (skel_1->NumJoints() != skel_2->NumJoints()) {
@@ -345,20 +352,74 @@ static void DrawSkeletonInterpolated(Skeleton* skel_1, Skeleton* skel_2, float t
         int parent_id1 = skel_1->GetJoint(i).parent_id;
         if (parent_id1 == -1) continue;
 
-        Vector3 bone_pos1 = skel_1->JointTransform(i) * Vector3::Zero();
-        Vector3 parent_pos1 = skel_1->JointTransform(parent_id1) * Vector3::Zero();
-
-        //second
         int parent_id2 = skel_2->GetJoint(i).parent_id;
         if (parent_id2 == -1) continue;
 
-        Vector3 bone_pos2 = skel_2->JointTransform(i) * Vector3::Zero();
-        Vector3 parent_pos2 = skel_2->JointTransform(parent_id2) * Vector3::Zero();
-
         //interpolation
+        Vector3 bone_pos   = InterpolateSkels(skel_1, i, skel_2, i, t);
+        Vector3 parent_pos = InterpolateSkels(skel_1, parent_id1, skel_2, parent_id2, t);
+        glVertex3f(bone_pos.x, bone_pos.y, bone_pos.z);
+        glVertex3f(parent_pos.x, parent_pos.y, parent_pos.z);
+    }
 
-        Vector3 bone_pos = bone_pos1 * (1-t) + bone_pos2 * t;
-        Vector3 parent_pos = parent_pos1 * (1-t) + parent_pos2 * t;
+    glEnd();
+
+    glLineWidth(1.0f);
+    glColor4f(1.0, 1.0, 1.0, 1.0);
+}
+
+//first index animation type, second index frame, rates are interpolation parameters between 0 and 1
+static void DrawSkeletonInterpolated(Skeleton* anim_1_1,
+									 Skeleton* anim_1_2,
+									 Skeleton* anim_2_1,
+									 Skeleton* anim_2_2,
+									 float time_rate,
+									 float mix_rate) {
+
+	if (anim_1_1->NumJoints() != anim_2_1->NumJoints()) {
+		printf("Animations skeletons from first frames don't match!");
+		return;
+	}
+	if (anim_1_2->NumJoints() != anim_2_2->NumJoints()) {
+		printf("Animations skeletons from second frames don't match!");
+		return;
+	}
+	if (anim_1_2->NumJoints() != anim_1_1->NumJoints()) {
+		printf("Animations skeletons between different frames don't match!");
+		return;
+	}
+    glColor4f(0.0, 0.0, 0.0, 1.0);
+    glLineWidth(2.0f);
+
+    glBegin(GL_LINES);
+
+    for (int i = 0; i < anim_1_1->NumJoints(); i++) {
+    	//Interpolation between animation types
+    	//first frame
+        int parent_id_1x1 = anim_1_1->GetJoint(i).parent_id;
+        if (parent_id_1x1 == -1) continue;
+
+        int parent_id_2x1 = anim_2_1->GetJoint(i).parent_id;
+        if (parent_id_2x1 == -1) continue;
+
+        Vector3 bone_pos1   = InterpolateSkels(anim_1_1, i, anim_2_1, i, mix_rate);
+        Vector3 parent_pos1 = InterpolateSkels(anim_1_1, parent_id_1x1, anim_2_1, parent_id_2x1, mix_rate);
+
+        //second frame
+        int parent_id_1x2 = anim_1_2->GetJoint(i).parent_id;
+        if (parent_id_1x2 == -1) continue;
+
+        int parent_id_2x2 = anim_2_2->GetJoint(i).parent_id;
+        if (parent_id_2x2 == -1) continue;
+
+        Vector3 bone_pos2   = InterpolateSkels(anim_1_2, i, anim_2_2, i, mix_rate);
+        Vector3 parent_pos2 = InterpolateSkels(anim_1_2, parent_id_1x2, anim_2_2, parent_id_2x2, mix_rate);
+
+        //interpolation between frames
+        Vector3 bone_pos =   bone_pos1   * (1-time_rate) + bone_pos2   * time_rate;
+        Vector3 parent_pos = parent_pos1 * (1-time_rate) + parent_pos2 * time_rate;
+
+        //render
         glVertex3f(bone_pos.x, bone_pos.y, bone_pos.z);
         glVertex3f(parent_pos.x, parent_pos.y, parent_pos.z);
     }
@@ -379,34 +440,60 @@ static void DrawModel() {
     **       the skeleton of the character in the rest pose.
     */
 
-    int curr_anim_frame = int(timer_glut * frames_per_second) % current_animation->NumFrames();
-    //time interpolation parameter between 0 and 1
-	float t = timer_glut * frames_per_second - int(timer_glut * frames_per_second);
-	t = Clamp(t, 0, 1);
-	int next_anim_frame = (curr_anim_frame + 1) % current_animation->NumFrames();
-	//just displaying required frame
+    //TIMING PART =========================================================================
+
+    //frame interpolation parameter between 0 and 1
+	float frame_mix_rate = global_frame - int(global_frame);
+	frame_mix_rate = Clamp(frame_mix_rate, 0, 1);
+
+    int curr_anim_frame, next_anim_frame;
 	if (frame_mode) {
+		//just displaying required frame
 		curr_anim_frame = selected_frame;
 		next_anim_frame = selected_frame;
-		t = 0;
+		frame_mix_rate = 0;
+	} else {
+		curr_anim_frame = int(global_frame);
+		next_anim_frame = curr_anim_frame + 1;
 	}
-    //VISUALIZATION PART -----------------------------------------------------------------
+
+	//normalise
+	int num_frames = (mix_anim) ? matches.size() : current_animation->NumFrames();
+    curr_anim_frame = curr_anim_frame % num_frames;
+    next_anim_frame = next_anim_frame % num_frames;
+
+    //VISUALIZATION PART ===================================================================
 
     if (show_skeleton) {
     	if (mix_anim) {
-    		int curr_mix_frame = int(timer_glut * frames_per_second) % matches.size();
-    		int walk_frame = matches[curr_mix_frame].first;
-    		int run_frame  = matches[curr_mix_frame].second;
+    		int walk_frame = matches[curr_anim_frame].first;
+    		int run_frame  = matches[curr_anim_frame].second;
+
+    		int next_walk_frame = matches[next_anim_frame].first;
+    		int next_run_frame  = matches[next_anim_frame].second;
+
     		float mix_rate = 0.5;
-    		DrawSkeletonInterpolated(walk_animation->GetFrame(walk_frame),
-    								 run_animation->GetFrame(run_frame),
-					                 mix_rate);
-    	} else if (interpolate) {
-    		DrawSkeletonInterpolated(current_animation->GetFrame(curr_anim_frame),
-    								 current_animation->GetFrame(next_anim_frame),
-					                 t);
+    		if (interpolate) {
+    			DrawSkeletonInterpolated(walk_animation->GetFrame(walk_frame),
+    									 walk_animation->GetFrame(next_walk_frame),
+										 run_animation->GetFrame(run_frame),
+										 run_animation->GetFrame(next_run_frame),
+										 frame_mix_rate,
+    									 mix_rate);
+    		} else {
+        		DrawSkeletonInterpolated(walk_animation->GetFrame(walk_frame),
+        								 run_animation->GetFrame(run_frame),
+    					                 mix_rate);
+    		}
+
     	} else {
-    		DrawSkeleton(current_animation->GetFrame(curr_anim_frame));
+    		if (interpolate) {
+				DrawSkeletonInterpolated(current_animation->GetFrame(curr_anim_frame),
+										 current_animation->GetFrame(next_anim_frame),
+										 frame_mix_rate);
+			} else {
+				DrawSkeleton(current_animation->GetFrame(curr_anim_frame));
+			}
     	}
     }
 
@@ -422,8 +509,8 @@ static void DrawModel() {
 			if (interpolate) {
 				Vertex vrtx_1 = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
 				Vertex vrtx_2 = LinearBlending(vrtx_original, current_tpf_gb[next_anim_frame]);
-				vrtx.position = vrtx_1.position * (1-t) + vrtx_2.position * t;
-				vrtx.normal   = vrtx_1.normal * (1-t) + vrtx_2.normal * t;
+				vrtx.position = vrtx_1.position * (1-frame_mix_rate) + vrtx_2.position * frame_mix_rate;
+				vrtx.normal   = vrtx_1.normal * (1-frame_mix_rate) + vrtx_2.normal * frame_mix_rate;
 			} else {
 				vrtx = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
 			}
@@ -547,15 +634,16 @@ void MouseMoveEvent(int x, int y) {
 }
 
 void ChangeFrames(int value) {
+	int num_frames = (mix_anim) ? matches.size() : current_animation->NumFrames();
 	if (frame_mode) {
 		selected_frame += value;
-	    int max_frames = current_animation->NumFrames() - 1;
+	    int max_frames = num_frames - 1;
 	    selected_frame = Clamp(selected_frame, 0, max_frames);
 		hint = "Current Frame: " + Int2String(selected_frame);
 	} else {
 		frames_per_second += value;
 	    frames_per_second = Clamp(frames_per_second, min_frames_per_second, max_frames_per_second);
-		hint = "Animation Speed: " + Int2String(((int)frames_per_second));
+		hint = "Animation Speed (Frames per Second): " + Int2String(((int)frames_per_second));
 	}
 }
 
