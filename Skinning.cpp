@@ -69,9 +69,9 @@ static float timer_glut = 0;
 static std::string hint="Default Mode";
 static bool show_skeleton = false;
 static bool show_mesh = true;
-static bool interpolate = false;
+static bool time_interpolation = false;
 static bool frame_mode = false;
-static bool mix_anim = false;
+static bool mix_walk_run_anim = false;
 
 /*speed of animation*/
 static float global_frame = 0.0f;
@@ -79,7 +79,11 @@ static float frames_per_second = 30.0f;
 static float max_frames_per_second = 40.0f;
 static float min_frames_per_second = 1.0f;
 
+/*user controlled parameters. Updated in key event function*/
+//between 0 and max_frame of current animation
 static int selected_frame = 0;
+//interpolation parameter between 0  and 1
+static float walk_run_mix_rate = 0.5f;
 
 /* to keep animation speed within certain limit */
 static float Clamp(float n, float lower, float upper) {
@@ -458,36 +462,35 @@ static void DrawModel() {
 	}
 
 	//normalise
-	int num_frames = (mix_anim) ? matches.size() : current_animation->NumFrames();
+	int num_frames = (mix_walk_run_anim) ? matches.size() : current_animation->NumFrames();
     curr_anim_frame = curr_anim_frame % num_frames;
     next_anim_frame = next_anim_frame % num_frames;
 
-    //VISUALIZATION PART ===================================================================
+    //SKELETON VISUALIZATION PART ==========================================================
 
     if (show_skeleton) {
-    	if (mix_anim) {
+    	if (mix_walk_run_anim) {
     		int walk_frame = matches[curr_anim_frame].first;
     		int run_frame  = matches[curr_anim_frame].second;
 
     		int next_walk_frame = matches[next_anim_frame].first;
     		int next_run_frame  = matches[next_anim_frame].second;
 
-    		float mix_rate = 0.5;
-    		if (interpolate) {
+    		if (time_interpolation) {
     			DrawSkeletonInterpolated(walk_animation->GetFrame(walk_frame),
     									 walk_animation->GetFrame(next_walk_frame),
 										 run_animation->GetFrame(run_frame),
 										 run_animation->GetFrame(next_run_frame),
 										 frame_mix_rate,
-    									 mix_rate);
+										 walk_run_mix_rate);
     		} else {
         		DrawSkeletonInterpolated(walk_animation->GetFrame(walk_frame),
         								 run_animation->GetFrame(run_frame),
-    					                 mix_rate);
+										 walk_run_mix_rate);
     		}
 
     	} else {
-    		if (interpolate) {
+    		if (time_interpolation) {
 				DrawSkeletonInterpolated(current_animation->GetFrame(curr_anim_frame),
 										 current_animation->GetFrame(next_anim_frame),
 										 frame_mix_rate);
@@ -497,7 +500,9 @@ static void DrawModel() {
     	}
     }
 
-    if (show_mesh) {
+    //MESH VISUALIZATION PART ==============================================================
+
+    if (show_mesh && !mix_walk_run_anim) {
 
 		for (int i = 0; i < character->NumVertices(); i++) {
 			/*
@@ -506,7 +511,7 @@ static void DrawModel() {
 			*/
 			Vertex vrtx_original = character->GetVertex(i);
 			Vertex vrtx;
-			if (interpolate) {
+			if (time_interpolation) {
 				Vertex vrtx_1 = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
 				Vertex vrtx_2 = LinearBlending(vrtx_original, current_tpf_gb[next_anim_frame]);
 				vrtx.position = vrtx_1.position * (1-frame_mix_rate) + vrtx_2.position * frame_mix_rate;
@@ -634,7 +639,7 @@ void MouseMoveEvent(int x, int y) {
 }
 
 void ChangeFrames(int value) {
-	int num_frames = (mix_anim) ? matches.size() : current_animation->NumFrames();
+	int num_frames = (mix_walk_run_anim) ? matches.size() : current_animation->NumFrames();
 	if (frame_mode) {
 		selected_frame += value;
 	    int max_frames = num_frames - 1;
@@ -691,8 +696,8 @@ void KeyEvent(unsigned char key, int x, int y) {
 
 	    case 'i':
 	    case 'I':
-	    	interpolate = !interpolate;
-	    	hint = (interpolate) ? "Interpolation: ON" : "Interpolation: OFF";
+	    	time_interpolation = !time_interpolation;
+	    	hint = (time_interpolation) ? "Time Interpolation: ON" : "Time Interpolation: OFF";
 	    	break;
 
 	    case 'f':
@@ -704,8 +709,17 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    case 'b':
 	    case 'B':
 	    	//b - blend/mix walk and run animation
-	    	mix_anim = !mix_anim;
-	    	hint = (mix_anim) ? "Mix walk/run: ON" : "Mix walk/run: OFF";
+	    	mix_walk_run_anim = !mix_walk_run_anim;
+	    	hint = (mix_walk_run_anim) ? "Mix walk/run: ON" : "Mix walk/run: OFF";
+	    	break;
+
+	    case 'z':
+	    case 'Z':
+	    case 'x':
+	    case 'X':
+	    	walk_run_mix_rate += ((key == 'z' || key == 'Z') ? -0.02f : 0.02f);
+	    	walk_run_mix_rate = Clamp(walk_run_mix_rate, 0, 1);
+	    	hint = "Walk/Run Blending Percent: " + Int2String((int)(walk_run_mix_rate * 100));
 	    	break;
     }
 
