@@ -341,6 +341,13 @@ static Vector3 InterpolateSkels(Skeleton* skel_1, int id1, Skeleton* skel_2, int
 	return v1 * (1-t) + v2 * t;
 }
 
+static Vertex InterpolateVertex(Vertex vrtx_1, Vertex vrtx_2, float t) {
+	Vertex vrtx;
+	vrtx.position = vrtx_1.position * (1-t) + vrtx_2.position * t;
+	vrtx.normal   = vrtx_1.normal   * (1-t) + vrtx_2.normal   * t;
+	return vrtx;
+}
+
 // t - interpolation parameter between 0 and 1
 static void DrawSkeletonInterpolated(Skeleton* skel_1, Skeleton* skel_2, float t) {
 	if (skel_1->NumJoints() != skel_2->NumJoints()) {
@@ -502,7 +509,7 @@ static void DrawModel() {
 
     //MESH VISUALIZATION PART ==============================================================
 
-    if (show_mesh && !mix_walk_run_anim) {
+    if (show_mesh) {
 
 		for (int i = 0; i < character->NumVertices(); i++) {
 			/*
@@ -511,13 +518,41 @@ static void DrawModel() {
 			*/
 			Vertex vrtx_original = character->GetVertex(i);
 			Vertex vrtx;
-			if (time_interpolation) {
-				Vertex vrtx_1 = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
-				Vertex vrtx_2 = LinearBlending(vrtx_original, current_tpf_gb[next_anim_frame]);
-				vrtx.position = vrtx_1.position * (1-frame_mix_rate) + vrtx_2.position * frame_mix_rate;
-				vrtx.normal   = vrtx_1.normal * (1-frame_mix_rate) + vrtx_2.normal * frame_mix_rate;
+
+			if (mix_walk_run_anim) {
+	    		int walk_frame = matches[curr_anim_frame].first;
+	    		int run_frame  = matches[curr_anim_frame].second;
+
+	    		int next_walk_frame = matches[next_anim_frame].first;
+	    		int next_run_frame  = matches[next_anim_frame].second;
+
+				if (time_interpolation) {
+					//first frame
+					Vertex vrtx_walk_1 = LinearBlending(vrtx_original, walk_tpf_gb[walk_frame]);
+					Vertex vrtx_run_1  = LinearBlending(vrtx_original,  run_tpf_gb[run_frame]);
+					Vertex vrtx_1 = InterpolateVertex(vrtx_walk_1, vrtx_run_1, walk_run_mix_rate);
+
+					//second frame
+					Vertex vrtx_walk_2 = LinearBlending(vrtx_original, walk_tpf_gb[next_walk_frame]);
+					Vertex vrtx_run_2  = LinearBlending(vrtx_original,  run_tpf_gb[next_run_frame]);
+					Vertex vrtx_2 = InterpolateVertex(vrtx_walk_2, vrtx_run_2, walk_run_mix_rate);
+
+					//interpolate frames
+					vrtx = InterpolateVertex(vrtx_1, vrtx_2, frame_mix_rate);
+				} else {
+					Vertex vrtx_walk = LinearBlending(vrtx_original, walk_tpf_gb[walk_frame]);
+					Vertex vrtx_run  = LinearBlending(vrtx_original,  run_tpf_gb[run_frame]);
+					vrtx = InterpolateVertex(vrtx_walk, vrtx_run, walk_run_mix_rate);
+				}
+
 			} else {
-				vrtx = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
+				if (time_interpolation) {
+					Vertex vrtx_1 = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
+					Vertex vrtx_2 = LinearBlending(vrtx_original, current_tpf_gb[next_anim_frame]);
+					vrtx = InterpolateVertex(vrtx_1, vrtx_2, frame_mix_rate);
+				} else {
+					vrtx = LinearBlending(vrtx_original, current_tpf_gb[curr_anim_frame]);
+				}
 			}
 
 			world_positions_array[(i*3)+0] = vrtx.position.x;
@@ -661,15 +696,17 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    case 's':
 	    case 'S':
 	    	//s - for skeleton
-	    	show_skeleton = !show_skeleton;
-	    	hint = (show_skeleton) ? "Show Skeleton: ON" : "Show Skeleton: OFF";
+	    	show_mesh = false;
+	    	show_skeleton = true;
+	    	hint = "Show Skeleton: ON";
 	    	break;
 
 	    case 'm':
 	    case 'M':
 	    	//m - for mesh
-	    	show_mesh = !show_mesh;
-	    	hint = (show_mesh) ? "Show Mesh: ON" : "Show Mesh: OFF";
+	    	show_mesh = true;
+	    	show_skeleton = false;
+	    	hint = "Show Mesh: ON";
 	    	break;
 	    //controlling animation speed
 	    case 'j':
@@ -685,12 +722,14 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    case 'W':
 	    	current_animation = walk_animation;
 	    	current_tpf_gb = walk_tpf_gb;
+	    	mix_walk_run_anim = false;
 	    	hint = "Current Animation: Walk";
 	    	break;
 	    case 'r':
 	    case 'R':
 	    	current_animation = run_animation;
 	    	current_tpf_gb = run_tpf_gb;
+	    	mix_walk_run_anim = false;
 	    	hint = "Current Animation: Run";
 	    	break;
 
@@ -709,8 +748,8 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    case 'b':
 	    case 'B':
 	    	//b - blend/mix walk and run animation
-	    	mix_walk_run_anim = !mix_walk_run_anim;
-	    	hint = (mix_walk_run_anim) ? "Mix walk/run: ON" : "Mix walk/run: OFF";
+	    	mix_walk_run_anim = true;
+	    	hint = "Current Animation: Walk/Run Mixture";
 	    	break;
 
 	    case 'z':
@@ -719,7 +758,7 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    case 'X':
 	    	walk_run_mix_rate += ((key == 'z' || key == 'Z') ? -0.02f : 0.02f);
 	    	walk_run_mix_rate = Clamp(walk_run_mix_rate, 0, 1);
-	    	hint = "Walk/Run Blending Percent: " + Int2String((int)(walk_run_mix_rate * 100));
+	    	hint = "Walk/Run Mix Ratio (0 - Walk, 100 - Run): " + Int2String((int)(walk_run_mix_rate * 100));
 	    	break;
     }
 
