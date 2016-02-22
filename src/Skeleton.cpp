@@ -46,6 +46,8 @@ Matrix_4x4 Skeleton::JointTransform(int i) {
 	 * check if joint transform has been already calculated for this joint
 	 * or any of its parents. But our skeleton is not big and joint path to the root is relatively short.
 	 * So I have decided to keep the existing skeleton class interface.
+	 * Moreover I store these global transforms in the skinning.cpp code
+	 * in order to avoid computing them again in each frame
 	 */
 	Joint joint = this->GetJoint(i);
 	Matrix_4x4 trans = Matrix_4x4::Translation(joint.position) * joint.rotation;

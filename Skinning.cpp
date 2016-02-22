@@ -38,15 +38,19 @@ static int last_y = -1;
 
 static Camera* camera = NULL;
 
+
 static Mesh* character = NULL;
 
+//animations
 static Animation* rest_animation = NULL;
 static Animation* run_animation = NULL;
 static Animation* walk_animation = NULL;
 
-static Animation* current_animation = NULL;
+static Animation* current_animation = NULL;//either walk or run
 
-/*gb - global frame
+/*
+ *Compute joint transformations in advance to save CPU
+ *b - global frame
  *lc - local frame
  *tpf - transforms per frame
  *we need  local only for rest pose
@@ -61,29 +65,32 @@ static std::vector<std::vector<Matrix_4x4> > current_tpf_gb;
 std::vector<std::pair<int, int> > matches;
 
 /* This timer can be used to cycle through the frames of animation */
+/*all of them calculated in the update function */
 static float timer = 0;
 static float timer_glut = 0;
+static float global_frame = 0.0f;
 
 /*variables to control the workflow */
 /*display variables */
 static std::string hint="Default Mode";
 static bool show_skeleton = false;
 static bool show_mesh = true;
-static bool time_interpolation = false;
+static bool time_interpolation = true;
 static bool frame_mode = false;
 static bool mix_walk_run_anim = false;
 
+/*user controlled parameters. Updated in key event function*/
 /*speed of animation*/
-static float global_frame = 0.0f;
 static float frames_per_second = 30.0f;
 static float max_frames_per_second = 40.0f;
 static float min_frames_per_second = 1.0f;
 
-/*user controlled parameters. Updated in key event function*/
 //between 0 and max_frame of current animation
 static int selected_frame = 0;
 //interpolation parameter between 0  and 1
 static float walk_run_mix_rate = 0.5f;
+
+//UTILS FOR FORMATTING/DISPLAYING   =================================================================
 
 /* to keep animation speed within certain limit */
 static float Clamp(float n, float lower, float upper) {
@@ -95,6 +102,31 @@ static std::string Int2String(int n) {
     oss << n;
     return oss.str();
 }
+
+//Util to display text hints in the bottom left corner of the window
+void DrawTextHint() {
+	//relying on http://stackoverflow.com/questions/20866508/using-glut-to-simply-print-text
+	glMatrixMode( GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+	gluOrtho2D(0, WIDTH, 0, HEIGHT);
+	glMatrixMode( GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+	//blue color
+	glColor4f(0.0, 0.0, 1.0, 1.0);
+	glRasterPos2i(10, 10); // move in 10 pixels from the left and bottom edges
+	for (size_t i = 0; i < hint.length(); ++i) {
+		glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, hint[i]);
+	}
+	glPopMatrix();
+	glMatrixMode( GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode( GL_MODELVIEW);
+}
+
+
+//MESH WEIGHT LINEAR BLENDING PART  =====================================================================
 
 //Normalise weights components to one, otherwise strange artifacts
 static Vector3 NormSumToOne(Vector3 v) {
@@ -119,6 +151,27 @@ static Vertex LinearBlending(Vertex& original, std::vector<Matrix_4x4>& anim_tra
 	return Vertex(pos, norm);
 }
 
+
+
+//UTILS FOR LINEAR INTERPOLATION  ======================================================================
+
+static Vector3 InterpolateSkels(Skeleton* skel_1, int id1, Skeleton* skel_2, int id2, float t) {
+	Vector3 v1 = skel_1->JointTransform(id1) * Vector3::Zero();
+	Vector3 v2 = skel_2->JointTransform(id2) * Vector3::Zero();
+	return v1 * (1-t) + v2 * t;
+}
+
+static Vertex InterpolateVertex(Vertex vrtx_1, Vertex vrtx_2, float t) {
+	Vertex vrtx;
+	vrtx.position = vrtx_1.position * (1-t) + vrtx_2.position * t;
+	vrtx.normal   = vrtx_1.normal   * (1-t) + vrtx_2.normal   * t;
+	return vrtx;
+}
+
+
+
+//UTILS TO STORE WALK AND RUN TRANSFORMS IN ADVANCE  ===================================================
+
 /*
  * Global transforms per frame for given animation.
  * Using vectors to alleviate problems with memory leaks.
@@ -137,7 +190,7 @@ static void ComputeTransPerFrameGB(std::vector<std::vector<Matrix_4x4> >& trans_
 }
 
 /*
- * Compute local transforms for Rest pose
+ * Compute local transforms (needed for Rest pose)
  */
 static void ComputeRestTransLC(std::vector<Matrix_4x4>& rest_trans_lc, Skeleton* rest_skel) {
 	rest_trans_lc.resize(rest_skel->NumJoints());
@@ -146,6 +199,17 @@ static void ComputeRestTransLC(std::vector<Matrix_4x4>& rest_trans_lc, Skeleton*
 	}
 }
 
+
+
+
+
+//WALK AND RUN BLENDING PART ===========================================================================
+//BASED ON:
+//Kovar, Lucas, and Michael Gleicher. "Flexible automatic motion blending with registration curves."
+//Proceedings of the 2003 ACM SIGGRAPH/Eurographics symposium on Computer animation. Eurographics Association, 2003.
+
+//compute distance between two character postures.
+//relies on the fact that two postures have the same root transform
 static float ComputeDistSkel(std::vector<Matrix_4x4>& trans_gb_1, std::vector<Matrix_4x4>& trans_gb_2) {
 	if (trans_gb_1.size() != trans_gb_2.size()) {
 		printf("The sizes of joints don't match");
@@ -161,10 +225,12 @@ static float ComputeDistSkel(std::vector<Matrix_4x4>& trans_gb_1, std::vector<Ma
 	return distance;
 }
 
+//Create distance table between different frames of Walking/Running animation
+//dists: first index - walk frame, second index - run frame
 static void ComputeWalkRunDists(std::vector<std::vector<float> >& dists) {
 	int num_run  = run_animation->NumFrames();
 	int num_walk = walk_animation->NumFrames();
-	// first index - walk frame, second index - run frame
+
 
 	dists.resize(num_walk);
 
@@ -176,10 +242,15 @@ static void ComputeWalkRunDists(std::vector<std::vector<float> >& dists) {
 	}
 }
 
+//Compute raw best matches between frames of walking and running animations.
+//This raw matches must be pruned in order to find sequence which forms animation loop.
+//matches: in pairs first is walk frame, second is run frame
+//dists: table computed in ComputeWalkRunDists
+//anim_length: number of frames in initial raw sequence. Must be big enough in order to find animation loop within it
 static void ComputeWalkRunMatches(std::vector<std::pair<int, int> >& matches, std::vector<std::vector<float> >& dists, int anim_length) {
 	int num_run  = run_animation->NumFrames();
 	int num_walk = walk_animation->NumFrames();
-	//found manually by observing logs
+	//find best initial frames
 	int walk_id = 0;
 	int run_id  = 9;
 	float min_run_dist = 1000000000000;
@@ -192,7 +263,11 @@ static void ComputeWalkRunMatches(std::vector<std::pair<int, int> >& matches, st
 		}
 	}
 
+	//calculate matches
+	//due to prev_step this algorithm is using
+	//Slope Limit = 2 (for clarification see paper mentioned above)
 	int prev_step = 0;// 1 - horiz, 2 - vert, 3 - diag
+	//saving initial point
 	matches.push_back(std::make_pair(walk_id, run_id));
 	for (int i = 1; i < anim_length; i++) {
 		float dist01 = dists[(walk_id) % num_walk][(run_id + 1) % num_run]; //horiz
@@ -219,6 +294,8 @@ static void ComputeWalkRunMatches(std::vector<std::pair<int, int> >& matches, st
 	}
 }
 
+//Prune raw_matches sequence found in ComputeWalkRunMatches in order to form animation loop (stored in matches).
+//If it doesn't find loop animation then return original raw_matches
 static void ComputeWalkRunLoop(std::vector<std::pair<int, int> >& raw_matches, std::vector<std::pair<int, int> >& matches) {
 	int run_frame = -1;
 	int prev_mix_frame = -1;
@@ -246,26 +323,7 @@ static void ComputeWalkRunLoop(std::vector<std::pair<int, int> >& raw_matches, s
 	}
 }
 
-void DrawTextHint() {
-	//relying on http://stackoverflow.com/questions/20866508/using-glut-to-simply-print-text
-	glMatrixMode( GL_PROJECTION);
-	glPushMatrix();
-	glLoadIdentity();
-	gluOrtho2D(0, WIDTH, 0, HEIGHT);
-	glMatrixMode( GL_MODELVIEW);
-	glPushMatrix();
-	glLoadIdentity();
-	//blue color
-	glColor4f(0.0, 0.0, 1.0, 1.0);
-	glRasterPos2i(10, 10); // move in 10 pixels from the left and bottom edges
-	for (size_t i = 0; i < hint.length(); ++i) {
-		glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, hint[i]);
-	}
-	glPopMatrix();
-	glMatrixMode( GL_PROJECTION);
-	glPopMatrix();
-	glMatrixMode( GL_MODELVIEW);
-}
+//WALK AND RUN BLENDING PART END ========================================================================
 
 
 void Update() {
@@ -335,18 +393,7 @@ static void DrawSkeleton(Skeleton* skeleton) {
     }
 }
 
-static Vector3 InterpolateSkels(Skeleton* skel_1, int id1, Skeleton* skel_2, int id2, float t) {
-	Vector3 v1 = skel_1->JointTransform(id1) * Vector3::Zero();
-	Vector3 v2 = skel_2->JointTransform(id2) * Vector3::Zero();
-	return v1 * (1-t) + v2 * t;
-}
-
-static Vertex InterpolateVertex(Vertex vrtx_1, Vertex vrtx_2, float t) {
-	Vertex vrtx;
-	vrtx.position = vrtx_1.position * (1-t) + vrtx_2.position * t;
-	vrtx.normal   = vrtx_1.normal   * (1-t) + vrtx_2.normal   * t;
-	return vrtx;
-}
+// SKELETON DRAWING FUNCTIONS =================================================================
 
 // t - interpolation parameter between 0 and 1
 static void DrawSkeletonInterpolated(Skeleton* skel_1, Skeleton* skel_2, float t) {
@@ -441,6 +488,9 @@ static void DrawSkeletonInterpolated(Skeleton* anim_1_1,
     glColor4f(1.0, 1.0, 1.0, 1.0);
 }
 
+
+//MODEL RENDERING PART =========================================================================
+
 static void DrawModel() {
     float* world_positions_array = new float[character->NumVertices() * 3];
     float* world_normals_array = new float[character->NumVertices() * 3];
@@ -474,7 +524,7 @@ static void DrawModel() {
     next_anim_frame = next_anim_frame % num_frames;
 
     //SKELETON VISUALIZATION PART ==========================================================
-
+    //definitely can be refactored but during experimentation refactoring does more harm than good
     if (show_skeleton) {
     	if (mix_walk_run_anim) {
     		int walk_frame = matches[curr_anim_frame].first;
@@ -673,6 +723,8 @@ void MouseMoveEvent(int x, int y) {
 
 }
 
+//USER INTERACTIONS PART ========================================================================
+
 void ChangeFrames(int value) {
 	int num_frames = (mix_walk_run_anim) ? matches.size() : current_animation->NumFrames();
 	if (frame_mode) {
@@ -692,7 +744,7 @@ void KeyEvent(unsigned char key, int x, int y) {
 		case GLUT_KEY_ESCAPE:
 			exit(EXIT_SUCCESS);
 			break;
-
+		//enable skeleton view
 	    case 's':
 	    case 'S':
 	    	//s - for skeleton
@@ -700,7 +752,7 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    	show_skeleton = true;
 	    	hint = "Show Skeleton: ON";
 	    	break;
-
+	    //enable mesh view
 	    case 'm':
 	    case 'M':
 	    	//m - for mesh
@@ -708,7 +760,7 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    	show_skeleton = false;
 	    	hint = "Show Mesh: ON";
 	    	break;
-	    //controlling animation speed
+	    //controlling animation speed or current frame
 	    case 'j':
 	    case 'J':
 	    	ChangeFrames(-1);
@@ -717,7 +769,7 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    case 'K':
 	    	ChangeFrames(+1);
 	    	break;
-
+	    //run walking animation
 	    case 'w':
 	    case 'W':
 	    	current_animation = walk_animation;
@@ -725,6 +777,7 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    	mix_walk_run_anim = false;
 	    	hint = "Current Animation: Walk";
 	    	break;
+	    //run running animation
 	    case 'r':
 	    case 'R':
 	    	current_animation = run_animation;
@@ -732,26 +785,26 @@ void KeyEvent(unsigned char key, int x, int y) {
 	    	mix_walk_run_anim = false;
 	    	hint = "Current Animation: Run";
 	    	break;
-
-	    case 'i':
-	    case 'I':
-	    	time_interpolation = !time_interpolation;
-	    	hint = (time_interpolation) ? "Time Interpolation: ON" : "Time Interpolation: OFF";
-	    	break;
-
-	    case 'f':
-	    case 'F':
-	    	frame_mode = !frame_mode;
-	    	hint = (frame_mode) ? "Frame Mode: ON" : "Frame Mode: OFF";
-	    	break;
-
+	    //run mixture of walking and running animation
 	    case 'b':
 	    case 'B':
 	    	//b - blend/mix walk and run animation
 	    	mix_walk_run_anim = true;
 	    	hint = "Current Animation: Walk/Run Mixture";
 	    	break;
-
+	    //enable Animation Keyframe Interpolation
+	    case 'i':
+	    case 'I':
+	    	time_interpolation = !time_interpolation;
+	    	hint = (time_interpolation) ? "Time Interpolation: ON" : "Time Interpolation: OFF";
+	    	break;
+	    //enable frame mode, current frame is controlled by j and k
+	    case 'f':
+	    case 'F':
+	    	frame_mode = !frame_mode;
+	    	hint = (frame_mode) ? "Frame Mode: ON" : "Frame Mode: OFF";
+	    	break;
+	    //Control the mix ratio between walking and running animation, z - reduce, x - increase
 	    case 'z':
 	    case 'Z':
 	    case 'x':
@@ -763,6 +816,8 @@ void KeyEvent(unsigned char key, int x, int y) {
     }
 
 }
+
+//USER INTERACTIONS PART END =========================================================================
 
 enum {
     SMD_STATE_EMPTY = 0,
@@ -945,34 +1000,31 @@ int main(int argc, char **argv) {
     printf("run_animation -> number of frames: %d \n", run_animation->NumFrames());
     printf("walk_animation -> number of frames: %d \n", walk_animation->NumFrames());
 
-    //compute initial transforms
+    //compute initial transforms in advance to save CPU =============================
     ComputeRestTransLC(rest_trans_lc, rest_animation->GetFrame(0));
     ComputeTransPerFrameGB(rest_tpf_gb, rest_animation);
     ComputeTransPerFrameGB(run_tpf_gb, run_animation);
     ComputeTransPerFrameGB(walk_tpf_gb, walk_animation);
 
-    //don't need to free current_animation
-    printf("current animation is walking");
-    //current_animation = rest_animation;
-    //current_tpf_gb = rest_tpf_gb;
-    current_animation = walk_animation;
-    current_tpf_gb = walk_tpf_gb;
-    //current_animation = run_animation;
-    //current_tpf_gb = run_tpf_gb;
+    //initialise start animation
+    current_animation = run_animation;
+    current_tpf_gb = run_tpf_gb;
 
-    //compute distance between animations
-
+    //Initialise structure for animation blending ===========================================
+    //compute distance between walk/run animations
     std::vector<std::vector<float> > dists;
     ComputeWalkRunDists(dists);
 
+    //print table. On DICE machine with BIG SCREEN I was able to see quite clearly
 	printf("\n\n");
 	printf("Walk/Run distance table:\n");
-	printf("run  id: ");//run header
+	//display run header
+	printf("run  id: ");
 	for (int run_id = 0; run_id < run_animation->NumFrames(); run_id++) {
 		printf("%5d ", run_id);
 	}
 	printf("\n");
-
+	//table body
 	for (int walk_id = 0; walk_id < dists.size(); walk_id++) {
 		printf("walk %2d: ", walk_id);//walk header
 		for (int run_id = 0; run_id < dists[walk_id].size(); run_id++) {
@@ -987,20 +1039,24 @@ int main(int argc, char **argv) {
 	std::vector<std::pair<int, int> > raw_matches;
 	ComputeWalkRunMatches(raw_matches, dists, num_frames_raw_animation);
 
+	//display raw sequence of blended frames
 	printf("\nRaw sequence of most suitable frames for blending, first - walk, second - run\n");
 	for (int i = 0; i < raw_matches.size(); i++) {
 		printf("(%d, %d);  ", raw_matches[i].first, raw_matches[i].second);
 	}
 	printf("\n");
 
-
+	//finding loop animation
 	ComputeWalkRunLoop(raw_matches, matches);
 
+	//display loop animation sequence of blended frames
 	printf("\nPruned sequence of most suitable frames for blending, first - walk, second - run\n");
 	for (int i = 0; i < matches.size(); i++) {
 		printf("(%d, %d);  ", matches[i].first, matches[i].second);
 	}
 	printf("\n");
+
+	//start main code =======================================================================
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGB|GLUT_DOUBLE|GLUT_DEPTH|GLUT_MULTISAMPLE);
@@ -1031,7 +1087,7 @@ int main(int argc, char **argv) {
 
     glutMainLoop();
 
-
+    //free allocated resources =====================================================================
     delete camera;
     delete character;
     delete rest_animation;
