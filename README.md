@@ -12,9 +12,9 @@
 > Kovar, Lucas, and Michael Gleicher. "Flexible automatic motion blending with registration curves." Proceedings of 
 > the 2003 ACM SIGGRAPH/Eurographics symposium on Computer animation. Eurographics Association, 2003.
 
-Полученный результат (качество не самое лучшее так как записано с виртуальной ubuntu, на MAC OS X сложно поставить 
+Полученный результат (качество gif и фремрейт не самые лучшее так как записано с виртуальной ubuntu, на MAC OS X сложно поставить 
 freeglut библиотеки, которые используются для рендера):
-![alt text](https://github.com/adam-p/markdown-here/raw/master/src/common/images/icon48.png "Logo Title Text 1")
+![alt text][https://github.com/rb-kuddai/cav_ru/blob/master/cav_hw_anim.gif]
 
 Большая часть моего кода в Skinning.cpp (ниже детальный отчет о том что было сделано). 
 Финальная оценка: 95/100
