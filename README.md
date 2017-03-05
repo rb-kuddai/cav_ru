@@ -1,3 +1,24 @@
+
+
+# Описание
+В данном задании, требовалось анимировать модель персонажа используя анимацию бега и ходьбы (в качестве начала нам предоставлялся
+код для загрузки анимации и модели). Особое внимание
+уделялось Skinning - сохранению объема персонажа в местах сгибов. 
+
+В качестве дополнительной части задания
+я выбрал плавную интерполяцию (Blending) между ходьбой и бегом, наподобие той, что можно видеть в Unity 3d mechanism. 
+Сложность было в том как синхронизировать циклы анимации (т.к. естественно бег имеет гораздо меньший период чем ходьба). 
+Для синхронизации циклов использовался алгоритм описанный в:
+> Kovar, Lucas, and Michael Gleicher. "Flexible automatic motion blending with registration curves." Proceedings of 
+> the 2003 ACM SIGGRAPH/Eurographics symposium on Computer animation. Eurographics Association, 2003.
+
+Полученный результат (качество не самое лучшее так как записано с виртуальной ubuntu, на MAC OS X сложно поставить 
+freeglut библиотеки, которые используются для рендера):
+![alt text](https://github.com/adam-p/markdown-here/raw/master/src/common/images/icon48.png "Logo Title Text 1")
+
+Большая часть моего кода в Skinning.cpp (ниже детальный отчет о том что было сделано). 
+Финальная оценка: 95/100
+
 # Computer Animation and Visualisation Assessment 1 - Skinning
 Ruslan Burakov, student id: s1569105
 
