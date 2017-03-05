@@ -14,7 +14,8 @@
 
 Полученный результат (качество gif и фремрейт не самые лучшее так как записано с виртуальной ubuntu, на MAC OS X сложно поставить 
 freeglut библиотеки, которые используются для рендера):
-![alt text][https://github.com/rb-kuddai/cav_ru/blob/master/cav_hw_anim.gif]
+
+![alt text](https://github.com/rb-kuddai/cav_ru/blob/master/cav_hw_anim.gif)
 
 Большая часть моего кода в Skinning.cpp (ниже детальный отчет о том что было сделано). 
 Финальная оценка: 95/100
